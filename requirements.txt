@@ -1,0 +1,9 @@
+chromadb
+rank_bm25
+requests
+pandas
+tqdm
+numpy
+scikit-learn
+wikipedia-api
+spacy
