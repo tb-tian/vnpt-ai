@@ -4,51 +4,13 @@ import glob
 import requests
 import time
 from rag_pipeline import RAGPipeline
+from get_embedding import get_embedding
 
 # Configuration
 DATA_DIR = "corpus"  # Directory containing .txt files
 VECTOR_DB_PATH = "./vector_db"
 CHUNK_SIZE = 500  # Characters (approx)
 OVERLAP = 50
-
-# Load API Key
-try:
-    with open('../api-keys.json', 'r') as f:
-        keys = json.load(f)
-        API_KEY = keys.get("VNPT_API_KEY", "")
-except FileNotFoundError:
-    API_KEY = os.environ.get("VNPT_API_KEY", "")
-
-EMBEDDING_URL = "https://llm.vnpt.ai/api/v1/embeddings"
-
-def get_embedding(text):
-    """
-    Call VNPT Embedding API.
-    """
-    headers = {
-        "Authorization": f"Bearer {API_KEY}",
-        "Content-Type": "application/json"
-    }
-    data = {
-        "input": text,
-        "model": "vnptai_hackathon_embedding"
-    }
-    # Retry logic
-    for _ in range(3):
-        try:
-            response = requests.post(EMBEDDING_URL, headers=headers, json=data, timeout=10)
-            if response.status_code == 200:
-                return response.json()['data'][0]['embedding']
-            elif response.status_code == 429:
-                print("Rate limit hit, waiting...")
-                time.sleep(2)
-            else:
-                print(f"Embedding Error: {response.status_code} - {response.text}")
-                break
-        except Exception as e:
-            print(f"Embedding Exception: {e}")
-            time.sleep(1)
-    return None
 
 def chunk_text(text, chunk_size=CHUNK_SIZE, overlap=OVERLAP):
     """

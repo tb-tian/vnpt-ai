@@ -186,6 +186,6 @@ if __name__ == "__main__":
     print("Crawling for Validation Set...")
     crawl_from_questions("AInicorns_TheBuilder_public_v1.1/data/val.json")
     
-    # Crawl from test.json
-    print("Crawling for Test Set...")
-    crawl_from_questions("AInicorns_TheBuilder_public_v1.1/data/test.json")
+    # # Crawl from test.json
+    # print("Crawling for Test Set...")
+    # crawl_from_questions("AInicorns_TheBuilder_public_v1.1/data/test.json")
