@@ -1,69 +1,23 @@
 import os
-import json
 import glob
-import requests
-import time
-from rag_pipeline import RAGPipeline
-from get_embedding import get_embedding
+from rag_langchain import LangChainRAG
 
 # Configuration
 DATA_DIR = "corpus"  # Directory containing .txt files
-VECTOR_DB_PATH = "./vector_db"
-CHUNK_SIZE = 500  # Characters (approx)
-OVERLAP = 50
-
-def chunk_text(text, chunk_size=CHUNK_SIZE, overlap=OVERLAP):
-    """
-    Simple sliding window chunking.
-    """
-    chunks = []
-    start = 0
-    text_len = len(text)
-    
-    while start < text_len:
-        end = start + chunk_size
-        chunk = text[start:end]
-        chunks.append(chunk)
-        start += (chunk_size - overlap)
-    
-    return chunks
 
 def main():
     # Initialize Pipeline
-    rag = RAGPipeline(vector_db_path=VECTOR_DB_PATH, embedding_api_func=get_embedding)
+    rag = LangChainRAG()
     
     # Find all text files
     files = glob.glob(os.path.join(DATA_DIR, "*.txt"))
     print(f"Found {len(files)} files in {DATA_DIR}")
     
-    all_chunks = []
-    all_metadatas = []
-    all_ids = []
-    
-    doc_counter = 0
-    
-    for file_path in files:
-        print(f"Processing {file_path}...")
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                text = f.read()
-                
-            chunks = chunk_text(text)
-            
-            for i, chunk in enumerate(chunks):
-                all_chunks.append(chunk)
-                all_metadatas.append({"source": os.path.basename(file_path), "chunk_id": i})
-                all_ids.append(f"{os.path.basename(file_path)}_{i}")
-                
-        except Exception as e:
-            print(f"Error reading {file_path}: {e}")
-
-    if all_chunks:
-        print(f"Ingesting {len(all_chunks)} chunks...")
-        rag.add_documents(all_chunks, all_metadatas, all_ids)
+    if files:
+        rag.ingest_data(files)
         print("Ingestion complete.")
     else:
-        print("No data to ingest.")
+        print("No files found to ingest.")
 
 if __name__ == "__main__":
     # Create dummy data if directory doesn't exist

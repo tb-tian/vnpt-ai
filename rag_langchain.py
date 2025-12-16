@@ -3,7 +3,7 @@ import requests
 from tqdm import tqdm
 from typing import List
 from langchain_core.embeddings import Embeddings
-from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
 from langchain_community.retrievers import BM25Retriever
 from langchain_classic.retrievers import EnsembleRetriever
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -33,30 +33,51 @@ class VNPTEmbeddings(Embeddings):
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         """Embed a list of documents."""
-        embeddings = []
-        for text in texts:
-            embeddings.append(self.embed_query(text))
+        import concurrent.futures
+        
+        # Use ThreadPoolExecutor to make parallel API calls
+        # Reduced to 5 workers to respect rate limits (approx 500 req/min)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            # Use tqdm to show progress of embedding within the batch
+            embeddings = list(tqdm(
+                executor.map(self.embed_query, texts), 
+                total=len(texts), 
+                desc="Embedding batch", 
+                leave=False
+            ))
         return embeddings
 
     def embed_query(self, text: str) -> List[float]:
         """Embed a single query."""
+        import time
+        import random
+
         json_data = {
             'model': 'vnptai_hackathon_embedding',
             'input': text,
             'encoding_format': 'float'
         }
         
-        try:
-            response = requests.post(
-                'https://api.idg.vnpt.vn/data-service/vnptai-hackathon-embedding',
-                headers=self.headers,
-                json=json_data
-            )
-            response.raise_for_status()
-            return response.json()['data'][0]['embedding']
-        except Exception as e:
-            print(f"Error embedding text: {e}")
-            return []
+        max_retries = 5
+        for attempt in range(max_retries):
+            try:
+                response = requests.post(
+                    'https://api.idg.vnpt.vn/data-service/vnptai-hackathon-embedding',
+                    headers=self.headers,
+                    json=json_data
+                )
+                response.raise_for_status()
+                return response.json()['data'][0]['embedding']
+            except Exception as e:
+                # If it's the last attempt, print error and return empty
+                if attempt == max_retries - 1:
+                    print(f"Error embedding text: {e}")
+                    return []
+                
+                # If we hit a rate limit or temporary error, wait and retry
+                sleep_time = (2 ** attempt) + random.uniform(0, 1)
+                time.sleep(sleep_time)
+        return []
 
 class LangChainRAG:
     def __init__(self, vector_db_path="./vector_db_langchain"):
@@ -71,31 +92,56 @@ class LangChainRAG:
 
     def ingest_data(self, file_paths: List[str]):
         """Ingest text files into the vector store"""
+        # Check for existing documents to avoid duplicates
+        try:
+            # Only fetch metadatas to be faster
+            existing_data = self.vectorstore.get(include=['metadatas'])
+            existing_sources = set()
+            if existing_data and 'metadatas' in existing_data:
+                for metadata in existing_data['metadatas']:
+                    if metadata and 'source' in metadata:
+                        existing_sources.add(metadata['source'])
+            print(f"Found {len(existing_sources)} existing sources in vector DB.")
+        except Exception as e:
+            print(f"Warning: Could not check existing data: {e}")
+            existing_sources = set()
+
+        # Filter out files that are already in the DB
+        new_file_paths = [p for p in file_paths if p not in existing_sources]
+        
+        if len(new_file_paths) < len(file_paths):
+            print(f"Skipping {len(file_paths) - len(new_file_paths)} files already ingested.")
+            
+        if not new_file_paths:
+            print("No new files to ingest.")
+            return
+
         documents = []
-        print("Reading files...")
-        for path in tqdm(file_paths, desc="Loading files"):
+        for path in tqdm(new_file_paths, desc="Loading files"):
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     text = f.read()
-                    documents.append(Document(page_content=text, metadata={"source": path}))
+                    if text.strip(): # Skip empty files
+                        documents.append(Document(page_content=text, metadata={"source": path}))
             except Exception as e:
                 print(f"Error reading {path}: {e}")
 
-        # Split text
-        print("Splitting text...")
+        if not documents:
+            print("No documents loaded.")
+            return
+
         text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=500,
-            chunk_overlap=50,
+            chunk_size=1000,
+            chunk_overlap=100,
             separators=["\n\n", "\n", ". ", " ", ""]
         )
         splits = text_splitter.split_documents(documents)
         
-        print(f"Created {len(splits)} chunks from {len(documents)} files.")
+        print(f"Ingesting {len(splits)} chunks...")
         
-        # Add to VectorDB in batches to show progress
-        batch_size = 100 # Adjust based on API limits/speed
-        print(f"Ingesting {len(splits)} chunks into VectorDB...")
-        for i in tqdm(range(0, len(splits), batch_size), desc="Embedding & Indexing"):
+        # Batch size for adding to Chroma (prevents hitting memory limits)
+        batch_size = 500
+        for i in tqdm(range(0, len(splits), batch_size), desc="Ingesting batches"):
             batch = splits[i:i + batch_size]
             self.vectorstore.add_documents(batch)
             
@@ -103,37 +149,35 @@ class LangChainRAG:
 
     def setup_retriever(self):
         """Setup Hybrid Retriever (Vector + BM25)"""
-        # Vector Retriever
+        # 1. Vector Retriever
         vector_retriever = self.vectorstore.as_retriever(search_kwargs={"k": 3})
         
-        # BM25 Retriever (Keyword)
-        # Note: In a real app, you might want to load all docs to initialize BM25
-        # For now, we assume the vectorstore has data we can fetch, 
-        # or we re-ingest for the sake of the example. 
-        # Ideally, you fetch all docs from Chroma to build BM25.
+        # 2. BM25 Retriever
+        # Fetch existing docs from Chroma to build BM25 index
+        existing_data = self.vectorstore.get()
+        all_texts = existing_data['documents']
         
-        # Fetching all docs for BM25 (simplified for demo)
-        all_docs = self.vectorstore.get()['documents']
-        if not all_docs:
+        if not all_texts:
             print("Vector store is empty. Please ingest data first.")
             return None
             
-        bm25_retriever = BM25Retriever.from_texts(all_docs)
+        print(f"Initializing BM25 with {len(all_texts)} documents...")
+        bm25_retriever = BM25Retriever.from_texts(all_texts)
         bm25_retriever.k = 3
 
-        # Ensemble (Hybrid) Retriever
+        # 3. Ensemble
         self.retriever = EnsembleRetriever(
             retrievers=[bm25_retriever, vector_retriever],
-            weights=[0.5, 0.5] # Equal weight to keyword and semantic search
+            weights=[0.5, 0.5]
         )
         return self.retriever
 
     def query(self, question: str):
         if not self.retriever:
+            print("Initializing retriever...")
             self.setup_retriever()
             
         if not self.retriever:
-            return "System not initialized with data."
+            return []
 
-        docs = self.retriever.invoke(question)
-        return docs
+        return self.retriever.invoke(question)
