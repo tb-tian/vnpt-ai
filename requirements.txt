@@ -1,3 +1,4 @@
+# Core dependencies
 chromadb
 rank_bm25
 requests
@@ -5,8 +6,19 @@ pandas
 tqdm
 numpy
 scikit-learn
-wikipedia-api
+
+# NLP libraries
 spacy
+wikipedia-api
+
+# LangChain ecosystem
 langchain
 langchain-chroma
 langchain-community
+langchain-core
+langchain-text-splitters
+
+# Additional required packages
+openai
+python-dotenv
+tiktoken
