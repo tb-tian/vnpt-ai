@@ -1,6 +1,10 @@
 import requests
 import json
 
+class ContentPolicyError(Exception):
+    """Raised when API rejects content due to safety policy"""
+    pass
+
 def get_response(messages, model="small", temperature=1.0, max_tokens=1000, 
                  n=1, logprobs=None, top_logprobs=None, response_format=None, **kwargs):
     """
@@ -73,6 +77,25 @@ def get_response(messages, model="small", temperature=1.0, max_tokens=1000,
         raise Exception(f"API request failed with status {response.status_code}: {response.text}")
 
     response_data = response.json()
+    
+    # Check for API error (content policy rejection)
+    if 'error' in response_data and 'choices' not in response_data:
+        error_msg = response_data.get('error', {}).get('message', 'Unknown error')
+        error_code = response_data.get('error', {}).get('code', 'Unknown')
+        
+        # Content policy violation
+        if error_code == 400 and 'không thể trả lời' in error_msg.lower():
+            raise ContentPolicyError(f"API rejected content: {error_msg}")
+        
+        # Other errors
+        raise Exception(f"API error {error_code}: {error_msg}")
+    
+    # Debug: Print response structure if choices not found
+    if 'choices' not in response_data:
+        print(f"DEBUG: API response missing 'choices' key")
+        print(f"Response keys: {response_data.keys()}")
+        print(f"Full response: {response_data}")
+        raise KeyError(f"'choices' key not found in API response. Available keys: {list(response_data.keys())}")
     
     # If n > 1 or logprobs requested, return full response for analysis
     if n > 1 or logprobs is not None:
