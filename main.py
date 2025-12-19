@@ -5,7 +5,8 @@ import os
 from rag_langchain import LangChainRAG
 from prompt_templates import (
     construct_prompt, construct_batch_prompt,
-    SYSTEM_PROMPTS, BATCH_SYSTEM_PROMPT
+    SYSTEM_PROMPTS, BATCH_SYSTEM_PROMPT,
+    CLASSIFICATION_SYSTEM_PROMPT, CLASSIFICATION_USER_TEMPLATE
 )
 from get_response import get_response
 from get_embedding import get_embedding
@@ -18,6 +19,76 @@ router = QuestionRouter()
 
 # Ensure retriever is ready (loads BM25 + Vector)
 rag.setup_retriever()
+
+
+def classify_questions_with_llm(questions_batch):
+    """
+    Classify a batch of questions using LLM (up to 10 questions)
+    
+    Args:
+        questions_batch: List of dicts with 'question' and 'qid' keys
+    
+    Returns:
+        Dict mapping qid to domain name (e.g., {"test_0001": "STEM", ...})
+    """
+    if not questions_batch:
+        return {}
+    
+    # Format questions for prompt
+    questions_list = []
+    for i, item in enumerate(questions_batch, 1):
+        question_text = item['question']
+        # Truncate very long questions to save tokens
+        if len(question_text) > 500:
+            question_text = question_text[:500] + "..."
+        questions_list.append(f"Câu {i}: {question_text}")
+    
+    questions_str = "\n\n".join(questions_list)
+    
+    # Construct prompt
+    user_prompt = CLASSIFICATION_USER_TEMPLATE.format(
+        num_questions=len(questions_batch),
+        questions_list=questions_str
+    )
+    
+    messages = [
+        {"role": "system", "content": CLASSIFICATION_SYSTEM_PROMPT},
+        {"role": "user", "content": user_prompt}
+    ]
+    
+    # Call LLM
+    try:
+        response = get_response(
+            messages,
+            model="small",  # Use small model for classification
+            temperature=0.1,  # Low temp for consistent classification
+            response_format={"type": "json_object"}  # Force JSON output
+        )
+        
+        # Parse JSON response
+        response = response.replace("```json", "").replace("```", "").strip()
+        classifications = json.loads(response)
+        
+        # Map back to qids
+        results = {}
+        for i, item in enumerate(questions_batch, 1):
+            domain = classifications.get(str(i), "MULTIDOMAIN")
+            # Validate domain
+            valid_domains = ["RAG", "STEM", "PRECISION_CRITICAL", "COMPULSORY", "MULTIDOMAIN"]
+            if domain not in valid_domains:
+                domain = "MULTIDOMAIN"
+            results[item['qid']] = domain
+        
+        return results
+        
+    except Exception as e:
+        print(f"  ⚠ LLM classification failed: {e}, falling back to rule-based")
+        # Fallback to rule-based router
+        results = {}
+        for item in questions_batch:
+            domain, _ = router.classify_question(item['question'], item.get('choices', []))
+            results[item['qid']] = domain
+        return results
 
 
 def solve_question(item):
@@ -664,6 +735,282 @@ def solve_batch_streaming(items, output_file):
         print(f"\n\n⚠ Interrupted by user!")
         print(f"Progress saved: {processed_count}/{total_items} questions completed")
         print(f"Resume by running again - already processed questions will be skipped")
+    except Exception as e:
+        print(f"\n\n✗ Error: {e}")
+        print(f"Progress saved: {processed_count}/{total_items} questions completed")
+        import traceback
+        traceback.print_exc()
+    finally:
+        if not csv_file.closed:
+            csv_file.close()
+        print(f"Output file closed: {output_file}")
+
+
+def solve_batch_streaming_llm(items, output_file):
+    """
+    OPTIMIZED v2: Solve questions with smart classification
+    
+    Flow:
+    1. Quick check: Is it RAG? (has "Dựa trên đoạn văn") → RAG buffer
+    2. Non-RAG questions → accumulate until 10 → LLM classify → domain buffers
+    3. When any domain buffer reaches batch_size → process immediately
+    4. Flush remaining buffers at the end
+    
+    Benefits:
+    - RAG detection by keywords (no LLM needed) → saves API calls
+    - Only classify non-RAG questions with LLM
+    - For 300 questions with ~30% RAG → only 21 API calls instead of 30
+    
+    Supports resume: skip questions already in output file
+    """
+    from config import BATCH_CONFIG
+    
+    # Check which questions already processed
+    processed_qids = set()
+    if os.path.exists(output_file):
+        print(f"Found existing output file, loading processed questions...")
+        try:
+            with open(output_file, 'r', encoding='utf-8') as f:
+                reader = csv.reader(f)
+                next(reader, None)  # Skip header
+                for row in reader:
+                    if row and len(row) >= 2:
+                        processed_qids.add(row[0])
+            print(f"  ✓ Found {len(processed_qids)} already processed questions")
+        except Exception as e:
+            print(f"  ⚠ Error reading existing file: {e}, starting fresh")
+            processed_qids = set()
+    
+    # Open output file in append mode
+    file_mode = 'a' if processed_qids else 'w'
+    csv_file = open(output_file, file_mode, newline='', encoding='utf-8')
+    writer = csv.writer(csv_file)
+    
+    # Write header if new file
+    if not processed_qids:
+        writer.writerow(['qid', 'answer'])
+        csv_file.flush()
+    
+    # Buffers
+    non_rag_buffer = []  # Questions waiting for LLM classification
+    domain_buffers = {
+        "PRECISION_CRITICAL": [],
+        "COMPULSORY": [],
+        "RAG": [],
+        "STEM": [],
+        "MULTIDOMAIN": []
+    }
+    
+    classification_batch_size = 10  # Classify 10 non-RAG questions at a time
+    total_items = len(items)
+    processed_count = len(processed_qids)
+    rag_detected = 0
+    non_rag_classified = 0
+    
+    # Print summary
+    print("="*80)
+    print("OPTIMIZED PROCESSING WITH SMART CLASSIFICATION")
+    print("="*80)
+    print(f"Total questions: {total_items}")
+    print(f"Already completed: {processed_count}")
+    print(f"Classification strategy:")
+    print(f"  - RAG: Keyword detection (no LLM)")
+    print(f"  - Non-RAG: LLM batch classification (10 questions/call)")
+    print("\nDomain processing modes:")
+    for domain_name in DOMAIN_CONFIGS:
+        config = DOMAIN_CONFIGS[domain_name]
+        mode = "Single" if not config.get('use_batch_processing', True) else f"Batch ({config.get('batch_size', 10)})"
+        print(f"  - {domain_name}: {mode}")
+    print("="*80)
+    print()
+    
+    def is_rag_question(question_text):
+        """Quick keyword check for RAG questions"""
+        rag_keywords = [
+            "dựa trên đoạn văn",
+            "theo đoạn văn",
+            "đoạn văn trên",
+            "trong đoạn văn",
+            "đoạn thông tin"
+        ]
+        question_lower = question_text.lower()
+        return any(keyword in question_lower for keyword in rag_keywords)
+    
+    def process_domain_buffer(domain, buffer_name="domain buffer"):
+        """Process a domain buffer when full"""
+        nonlocal processed_count
+        
+        buffer = domain_buffers[domain]
+        if not buffer:
+            return
+        
+        strategy = DOMAIN_CONFIGS.get(domain, {})
+        use_batch = strategy.get('use_batch_processing', True)
+        domain_batch_size = strategy.get('batch_size', 10)
+        
+        # Process full batches
+        while len(buffer) >= domain_batch_size:
+            batch_items = buffer[:domain_batch_size]
+            domain_buffers[domain] = buffer[domain_batch_size:]
+            
+            if use_batch:
+                # Batch processing
+                print(f"  → {domain} batch ({len(batch_items)} questions)...", end=' ')
+                try:
+                    batch_results = process_domain_batch(batch_items, domain)
+                    
+                    for batch_item in batch_items:
+                        batch_qid = batch_item['qid']
+                        answer = batch_results.get(batch_qid, "A")
+                        writer.writerow([batch_qid, answer])
+                        processed_qids.add(batch_qid)
+                        processed_count += 1
+                    
+                    csv_file.flush()
+                    print(f"✓ | Total: {processed_count}/{total_items}")
+                except Exception as e:
+                    print(f"✗ Error: {e}")
+                    for batch_item in batch_items:
+                        writer.writerow([batch_item['qid'], "A"])
+                        processed_qids.add(batch_item['qid'])
+                        processed_count += 1
+                    csv_file.flush()
+            else:
+                # Single processing
+                for item in batch_items:
+                    qid = item['qid']
+                    method = "verification" if strategy.get('use_self_verification') else "voting" if strategy.get('use_majority_voting') else "single"
+                    print(f"  → {qid} ({domain} - {method})...", end=' ')
+                    
+                    try:
+                        answer = solve_question(item)
+                        writer.writerow([qid, answer])
+                        processed_qids.add(qid)
+                        processed_count += 1
+                        csv_file.flush()
+                        print(f"✓ {answer} | Total: {processed_count}/{total_items}")
+                    except Exception as e:
+                        print(f"✗ Error: {e}")
+                        writer.writerow([qid, "A"])
+                        processed_qids.add(qid)
+                        processed_count += 1
+                        csv_file.flush()
+    
+    try:
+        # Process all items
+        for idx, item in enumerate(items, 1):
+            qid = item['qid']
+            
+            # Skip if already processed
+            if qid in processed_qids:
+                continue
+            
+            question_text = item['question']
+            
+            # Step 1: Quick RAG detection
+            if is_rag_question(question_text):
+                # RAG question - add to RAG buffer directly
+                domain_buffers['RAG'].append(item)
+                rag_detected += 1
+                
+                # Process RAG buffer if full
+                process_domain_buffer('RAG')
+            else:
+                # Non-RAG question - add to classification buffer
+                non_rag_buffer.append(item)
+                
+                # Step 2: When non-RAG buffer is full, classify with LLM
+                if len(non_rag_buffer) >= classification_batch_size:
+                    batch_to_classify = non_rag_buffer[:classification_batch_size]
+                    non_rag_buffer = non_rag_buffer[classification_batch_size:]
+                    
+                    print(f"[{idx}/{total_items}] Classifying {len(batch_to_classify)} non-RAG questions with LLM...", end=' ')
+                    classifications = classify_questions_with_llm(batch_to_classify)
+                    print(f"✓")
+                    
+                    non_rag_classified += len(batch_to_classify)
+                    
+                    # Step 3: Add to domain buffers
+                    for item_to_classify in batch_to_classify:
+                        domain = classifications.get(item_to_classify['qid'], 'MULTIDOMAIN')
+                        domain_buffers[domain].append(item_to_classify)
+                    
+                    # Step 4: Process domain buffers that are full
+                    for domain in domain_buffers.keys():
+                        process_domain_buffer(domain)
+        
+        # Classify remaining non-RAG buffer
+        if non_rag_buffer:
+            print(f"\nClassifying {len(non_rag_buffer)} remaining non-RAG questions...", end=' ')
+            classifications = classify_questions_with_llm(non_rag_buffer)
+            print(f"✓")
+            
+            non_rag_classified += len(non_rag_buffer)
+            
+            for item_to_classify in non_rag_buffer:
+                domain = classifications.get(item_to_classify['qid'], 'MULTIDOMAIN')
+                domain_buffers[domain].append(item_to_classify)
+        
+        # Step 5: Flush remaining domain buffers
+        print(f"\n{'='*80}")
+        print("Processing remaining questions in domain buffers...")
+        print(f"{'='*80}")
+        
+        for domain, remaining_items in domain_buffers.items():
+            if not remaining_items:
+                continue
+            
+            print(f"\n{domain}: {len(remaining_items)} questions")
+            strategy = DOMAIN_CONFIGS.get(domain, {})
+            use_batch = strategy.get('use_batch_processing', True)
+            
+            if use_batch:
+                # Batch process remaining
+                try:
+                    batch_results = process_domain_batch(remaining_items, domain)
+                    
+                    for item in remaining_items:
+                        qid = item['qid']
+                        answer = batch_results.get(qid, "A")
+                        writer.writerow([qid, answer])
+                        processed_qids.add(qid)
+                        processed_count += 1
+                    
+                    csv_file.flush()
+                    print(f"  ✓ Processed {len(remaining_items)} questions")
+                except Exception as e:
+                    print(f"  ✗ Error: {e}")
+                    for item in remaining_items:
+                        writer.writerow([item['qid'], "A"])
+                        processed_qids.add(item['qid'])
+                        processed_count += 1
+                    csv_file.flush()
+            else:
+                # Single process remaining
+                for item in remaining_items:
+                    try:
+                        answer = solve_question(item)
+                        writer.writerow([item['qid'], answer])
+                        processed_qids.add(item['qid'])
+                        processed_count += 1
+                    except:
+                        writer.writerow([item['qid'], "A"])
+                        processed_qids.add(item['qid'])
+                        processed_count += 1
+                csv_file.flush()
+                print(f"  ✓ Processed {len(remaining_items)} questions")
+        
+        print(f"\n{'='*80}")
+        print(f"✓ Completed: {processed_count}/{total_items} questions processed")
+        print(f"\nClassification stats:")
+        print(f"  - RAG detected by keywords: {rag_detected}")
+        print(f"  - Non-RAG classified by LLM: {non_rag_classified}")
+        print(f"  - LLM API calls saved: ~{rag_detected // 10} calls")
+        print(f"{'='*80}")
+        
+    except KeyboardInterrupt:
+        print(f"\n\n⚠ Interrupted by user!")
+        print(f"Progress saved: {processed_count}/{total_items} questions completed")
     except Exception as e:
         print(f"\n\n✗ Error: {e}")
         print(f"Progress saved: {processed_count}/{total_items} questions completed")
