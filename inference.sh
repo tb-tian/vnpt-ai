@@ -45,20 +45,31 @@ echo ""
 echo "Step 2: Initializing Vector Database..."
 echo "----------------------------------------"
 
+# Kiểm tra và tạo corpus nếu cần
+if [ ! -d "/code/corpus" ] || [ ! "$(ls -A /code/corpus)" ]; then
+    echo "Corpus directory empty or not found"
+    
+    if [ -f "/code/crawl.py" ]; then
+        echo "Running crawl.py to build corpus..."
+        mkdir -p /code/corpus
+        python3 /code/crawl.py || {
+            echo "WARNING: Crawl failed, creating minimal corpus..."
+            echo "Sample corpus data for vector database initialization" > /code/corpus/sample.txt
+        }
+    else
+        echo "WARNING: crawl.py not found, creating minimal corpus..."
+        mkdir -p /code/corpus
+        echo "Sample corpus data for vector database initialization" > /code/corpus/sample.txt
+    fi
+else
+    echo "Corpus directory found: $(ls /code/corpus | wc -l) files"
+fi
+
+# Khởi tạo vector database
 if [ -d "/code/vector_db_langchain" ] && [ "$(ls -A /code/vector_db_langchain)" ]; then
     echo "Vector database already exists, skipping initialization"
 else
     echo "Vector database not found, initializing..."
-    
-    # Kiểm tra corpus
-    if [ ! -d "/code/corpus" ] || [ ! "$(ls -A /code/corpus)" ]; then
-        echo "WARNING: Corpus directory empty or not found"
-        echo "Creating minimal corpus..."
-        mkdir -p /code/corpus
-        echo "Sample corpus data for vector database initialization" > /code/corpus/sample.txt
-    else
-        echo "Corpus directory found: $(ls /code/corpus | wc -l) files"
-    fi
     
     # Chạy ingest_data.py để khởi tạo vector database
     if [ -f "/code/ingest_data.py" ]; then
