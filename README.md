@@ -18,7 +18,7 @@ Hệ thống có các thành phần chính sau:
 
 ### Sơ đồ luồng dữ liệu tóm tắt:
 
-```mermaid
+```
 Input (JSON) 
   --> [RAG Keyword Check] --(Yes)--> [RAG Buffer]
   --> [LLM Router] --(Classify)--> [Domain Buffers]
@@ -28,7 +28,7 @@ Input (JSON)
         |--> MULTIDOMAIN (Đa lĩnh vực)
   --> [Processing Engine]
         |--> Batch Processing (Nhóm câu hỏi)
-        |--> Chain-of-Thought / Voting (Cho STEM)
+        |--> Chain-of-Thought with Voting and Reviewing system (Cho STEM)
   --> [Output Generator] --> CSV Submission
 
 ```
