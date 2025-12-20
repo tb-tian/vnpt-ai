@@ -1,0 +1,154 @@
+# ============================================================================
+# VNPT AI - Docker Ignore File
+# Only include essential files for production pipeline
+# ============================================================================
+
+# ============================================================================
+# Git & Version Control
+# ============================================================================
+.git
+.gitignore
+.gitattributes
+
+# ============================================================================
+# Python Cache & Build
+# ============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.pyc
+*.pyo
+*.pyd
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# ============================================================================
+# Virtual Environments
+# ============================================================================
+venv/
+ENV/
+env/
+.venv
+.env
+
+# ============================================================================
+# IDE & Editors
+# ============================================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ============================================================================
+# Test Files (EXCLUDE ALL)
+# ============================================================================
+test_*.py
+*_test.py
+quick_test.py
+test_code/
+test.json
+
+# ============================================================================
+# Analysis & Debug Files (EXCLUDE ALL)
+# ============================================================================
+analyze_*.py
+calculate_*.py
+check_system.py
+final_system_check.py
+verify_system.py
+stem_self_verify.py
+
+# ============================================================================
+# Conversion & Demo Scripts (EXCLUDE ALL)
+# ============================================================================
+convert_*.py
+demo_*.py
+filter_*.py
+crawl.py
+
+# ============================================================================
+# Output Files (EXCLUDE ALL)
+# ============================================================================
+*.csv
+!requirements.txt
+*.log
+stem_batch_reasoning_log.txt
+stem_verify_full_log.txt
+classification_comparison_report.json
+text.txt
+
+# ============================================================================
+# Documentation (EXCLUDE MOST, KEEP README)
+# ============================================================================
+CHECKLIST.md
+OPTIMIZATION_PLAN.md
+STREAMING_BATCH.md
+SYSTEM_DOCS.md
+SETUP_COMPLETE.md
+DOCKER_GUIDE.md
+SUBMISSION_CHECKLIST.md
+TEST_LOCAL_GUIDE.md
+QA.txt
+text.txt
+promp_fallback.txt
+*.pdf
+
+# ============================================================================
+# Data Files (EXCLUDE - will be mounted)
+# ============================================================================
+data/
+*.json
+!api-keys.json
+stem_val.json
+stem_test.json
+
+# ============================================================================
+# Test/Temporary Directories
+# ============================================================================
+code/
+test_data/
+test_output/
+output/
+
+# ============================================================================
+# KEEP THESE FILES (Pipeline Essentials)
+# ============================================================================
+# Core Python files
+!predict.py
+!main.py
+!config.py
+!rag_langchain.py
+!router_logic.py
+!prompt_templates.py
+!get_response.py
+!get_embedding.py
+!ingest_data.py
+
+# Docker & Deployment
+!Dockerfile
+!inference.sh
+!requirements.txt
+!README.md
+
+# Runtime data (auto-generated if missing)
+# corpus/ - needed for RAG
+# vector_db_langchain/ - needed for vector search
+# api-keys.json - needed for API calls (runtime)

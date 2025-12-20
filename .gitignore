@@ -1,8 +1,71 @@
+# Python
 __pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# IDE
 .vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# API Keys and Secrets (IMPORTANT!)
+api-keys.json
+.env
+*.key
+*.pem
+
+# Large data directories
 corpus/
 corpus_1/
 corpus_hybrid_bs4/
 data/
 docs/
 vector_db_langchain/
+
+# Output files
+output.csv
+val.csv
+test.csv
+stem_val.csv
+stem_test.csv
+test_stem.csv
+submission.csv
+submission_time.csv
+
+# Logs
+*.log
+stem_batch_reasoning_log.txt
+stem_verify_full_log.txt
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test directories
+test_data/
+test_output/

@@ -21,6 +21,19 @@ router = QuestionRouter()
 rag.setup_retriever()
 
 
+def is_rag_question(question_text):
+    """Quick keyword check for RAG questions"""
+    rag_keywords = [
+        "dựa trên đoạn văn",
+        "theo đoạn văn",
+        "đoạn văn trên",
+        "trong đoạn văn",
+        "đoạn thông tin"
+    ]
+    question_lower = question_text.lower()
+    return any(keyword in question_lower for keyword in rag_keywords)
+
+
 def classify_questions_with_llm(questions_batch):
     """
     Classify a batch of questions using LLM (up to 10 questions)
@@ -823,18 +836,6 @@ def solve_batch_streaming_llm(items, output_file):
         print(f"  - {domain_name}: {mode}")
     print("="*80)
     print()
-    
-    def is_rag_question(question_text):
-        """Quick keyword check for RAG questions"""
-        rag_keywords = [
-            "dựa trên đoạn văn",
-            "theo đoạn văn",
-            "đoạn văn trên",
-            "trong đoạn văn",
-            "đoạn thông tin"
-        ]
-        question_lower = question_text.lower()
-        return any(keyword in question_lower for keyword in rag_keywords)
     
     def process_domain_buffer(domain, buffer_name="domain buffer"):
         """Process a domain buffer when full"""
