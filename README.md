@@ -1,381 +1,157 @@
-# VNPT AI - Age of Alnicorns - Track 2: The Builder
-## Team Submission Repository
+# Mô Tả Giải Pháp & Pipeline - VNPT AI Hackathon (Track 2)
 
----
+## 1. Tổng quan
 
-## 📋 Table of Contents
-1. [Pipeline Flow](#pipeline-flow)
-2. [Data Processing](#data-processing)
-3. [Resource Initialization](#resource-initialization)
-4. [Installation & Setup](#installation--setup)
-5. [Running the System](#running-the-system)
-6. [Docker Instructions](#docker-instructions)
-7. [Project Structure](#project-structure)
+Hệ thống được thiết kế để giải quyết bài toán trả lời câu hỏi trắc nghiệm đa lĩnh vực (Multiple Choice Question Answering) trong khuôn khổ cuộc thi VNPT AI Hackathon. Giải pháp tập trung vào việc xây dựng một pipeline tự động, kết hợp giữa kỹ thuật **Retrieval-Augmented Generation (RAG)** và **Phân loại câu hỏi** để tối ưu hóa độ chính xác và hiệu năng sử dụng API.
 
----
+Hệ thống đã xây dựng khả năng nhận diện ngữ cảnh của từng câu hỏi để áp dụng chiến lược xử lý khác nhau và tham số mô hình (Temperature, Top-k) phù hợp nhất đối với các dạng câu hỏi khác nhau.
 
-## 🔄 Pipeline Flow
+## 2. Kiến trúc hệ thống
 
-### System Architecture
+Hệ thống có các thành phần chính sau:
 
-```
-Input (private_test.json)
-        ↓
-   [Question Router]
-        ↓
-    ┌───┴───┬───────────┬──────────────┬────────────┐
-    │       │           │              │            │
- [STEM]  [RAG]  [COMPULSORY]  [PRECISION]  [MULTIDOMAIN]
-    │       │           │              │            │
-    ↓       ↓           ↓              ↓            ↓
-[Voting] [Context] [RAG+Batch]  [Batch Process] [General]
-    │       │           │              │            │
-    └───┬───┴───────────┴──────────────┴────────────┘
-        ↓
-    [LLM Response]
-        ↓
-   [Post-process]
-        ↓
- Output (submission.csv, submission_time.csv)
-```
+1. **Crawl Data & Indexing:** Crawl data dựa trên file val.json và file test.json mà BTC cung cấp, sau đó build vector database dựa trên corpus đấy.
+2. **Input Processing & Routing:** Đọc và phân loại câu hỏi.
+3. **Retrieval Engine (RAG):** Truy xuất thông tin liên quan (đối với các câu hỏi cần kiến thức ngoài).
+4. **Domain-Specific Inference:** Suy luận và generate câu trả lời dựa trên đặc thù lĩnh vực.
+5. **Post-processing:** Chuẩn hóa định dạng đầu ra.
 
-### Pipeline Components
+### Sơ đồ luồng dữ liệu tóm tắt:
 
-1. **Question Router (router_logic.py)**
-   - Classifies questions into domains using rule-based + LLM hybrid approach
-   - Domains: STEM, RAG, COMPULSORY, PRECISION_CRITICAL, MULTIDOMAIN
-   - Returns domain and confidence score
-
-2. **RAG System (rag_langchain.py)**
-   - Hybrid retrieval: BM25 + Vector Search (ChromaDB)
-   - Langchain-based implementation
-   - Retrieves relevant context from corpus documents
-
-3. **Domain-Specific Processing**
-   - **STEM**: Majority voting (5 completions) or self-verification
-   - **RAG**: Extracts context from question text
-   - **COMPULSORY**: Uses RAG with Vietnamese culture/history corpus
-   - **PRECISION_CRITICAL**: Batch processing with low temperature
-   - **MULTIDOMAIN**: General LLM inference
-
-4. **LLM Integration (get_response.py)**
-   - Supports small and large models
-   - Temperature control per domain
-   - JSON output formatting for classification
-
-5. **Post-processing**
-   - Answer extraction with regex patterns
-   - Validation against number of choices
-   - Fallback to 'A' for invalid answers
-
----
-
-## 📊 Data Processing
-
-### Data Collection
-
-1. **Corpus Data (corpus/)**
-   - Wikipedia articles in Vietnamese
-   - Focused on Vietnamese culture, history, and general knowledge
-   - Text files processed and indexed
-
-### Data Cleaning & Preprocessing
-
-1. **Text Processing**
-   - UTF-8 encoding handling
-   - Removal of special characters
-   - Normalization of Vietnamese diacritics
-
-2. **Document Chunking**
-   - Split long documents into manageable chunks
-   - Overlap strategy for context preservation
-   - Chunk size optimized for embedding model
-
-3. **Embedding Generation**
-   - Uses competition-provided embedding API
-   - Cached embeddings for efficiency
-   - Batch processing to respect rate limits
-
----
-
-## ⚙️ Resource Initialization
-
-### 1. Vector Database Setup
-
-**Prerequisites:**
-- Corpus documents in `corpus/` directory
-- Embedding API keys in `api-keys.json`
-
-**Initialization Steps:**
-
-```bash
-# Step 1: Prepare corpus data
-python ingest_data.py
-
-# Step 2: Build vector database (ChromaDB)
-# The RAG system automatically initializes on first run
-```
-
-**Vector Database Structure:**
-```
-vector_db_langchain/
-├── chroma.sqlite3          # ChromaDB metadata
-├── embeddings/             # Stored embeddings
-└── indices/                # BM25 indices
-```
-
-### 2. BM25 Index
-
-- Built automatically during RAG initialization
-- Uses rank_bm25 library
-- Stored in memory for fast retrieval
-
-### 3. Required Files
-
-Ensure these files exist before running:
+```mermaid
+Input (JSON) 
+  --> [RAG Keyword Check] --(Yes)--> [RAG Buffer]
+  --> [LLM Router] --(Classify)--> [Domain Buffers]
+        |--> STEM (Toán/Logic)
+        |--> COMPULSORY (Sử/Địa/Văn hóa)
+        |--> PRECISION_CRITICAL (An toàn nội dung)
+        |--> MULTIDOMAIN (Đa lĩnh vực)
+  --> [Processing Engine]
+        |--> Batch Processing (Nhóm câu hỏi)
+        |--> Chain-of-Thought / Voting (Cho STEM)
+  --> [Output Generator] --> CSV Submission
 
 ```
-api-keys.json              # API keys for LLM and embedding
-config.py                  # Domain configurations
-prompt_templates.py        # System prompts and templates
-router_logic.py            # Question routing logic
-corpus/                    # Wikipedia corpus (auto-downloaded if missing)
-```
 
-### 4. API Keys Configuration
+## 3. Chi tiết
 
-Create `api-keys.json` with the following structure:
+### 3.1. Phân loại Câu hỏi
 
-```json
-{
-  "SMALL_MODEL_API_KEY": "your_small_model_key",
-  "LARGE_MODEL_API_KEY": "your_large_model_key",
-  "EMBEDDING_API_KEY": "your_embedding_key"
-}
-```
+Hệ thống sử dụng Hybrid Routing để cân bằng giữa tốc độ và độ chính xác:
 
----
+* **Bộ lọc từ khóa (Rule-based):**
+* Phát hiện câu hỏi đọc hiểu (RAG domain) thông qua các cụm từ như "Dựa trên đoạn văn", "Thông tin:".
 
-## 🚀 Installation & Setup
 
-### Local Setup (Without Docker)
+* **Phân loại bằng LLM (LLM-based Classification):**
+* Các câu hỏi còn lại sẽ được gom nhóm (batch size = 10) và gửi tới mô hình `vnptai_hackathon_small`.
+* Mô hình đóng vai trò như một bộ định tuyến, gán nhãn câu hỏi vào một trong các miền: `STEM`, `PRECISION_CRITICAL`, `COMPULSORY`, hoặc `MULTIDOMAIN`.
 
-1. **Clone Repository**
-```bash
-git clone <repository_url>
-cd vnpt-ai
-```
 
-2. **Install Dependencies**
-```bash
-pip install -r requirements.txt
-python -m spacy download vi_core_news_lg
-```
 
-3. **Prepare Resources**
-```bash
-# Ingest corpus data and build vector database
-python ingest_data.py
+### 3.2. Hệ thống truy xuất thông tin
 
-# Verify system setup
-python final_system_check.py
-```
+Module RAG (`rag_langchain.py`) chịu trách nhiệm cung cấp ngữ cảnh cho các câu hỏi yêu cầu kiến thức bên ngoài (đặc biệt là nhóm `COMPULSORY` - Lịch sử, Văn hóa Việt Nam).
 
-4. **Test the Pipeline**
-```bash
-# Run on validation set
-python main.py
-```
+* **Dữ liệu:** Sử dụng Corpus từ Wikipedia tiếng Việt và DuckDuckGo (đã được làm sạch và xử lý qua `crawl.py`).
+* **Vector Database:** Sử dụng **ChromaDB** để lưu trữ các embedding vector.
+* **Chiến lược Retrieval:** Sử dụng `EnsembleRetriever` kết hợp giữa:
+1. **Vector Search:** Tìm kiếm ngữ nghĩa sử dụng mô hình `vnptai_hackathon_embedding`.
+2. **BM25 (Best Matching 25):** Tìm kiếm dựa trên tần suất từ khóa chính xác.
 
-### Environment Requirements
 
-- Python 3.8+
-- CUDA 12.2 (for GPU acceleration)
-- 8GB+ RAM
-- 5GB+ disk space for vector database
+* Tỷ trọng: 50% Vector + 50% BM25 để đảm bảo bắt được cả ngữ nghĩa và từ khóa cụ thể.
 
----
 
-## 🏃 Running the System
 
-### Standard Execution
+### 3.3. Chiến lược Xử lý theo Lĩnh vực (Domain Strategies)
 
-```bash
-# Run prediction pipeline
-python predict.py
-```
+Mỗi lĩnh vực được cấu hình riêng biệt trong `config.py` và `prompt_templates.py` để tối ưu hóa kết quả:
 
-**Input:** `/code/private_test.json`  
-**Output:** 
-- `/code/submission.csv` - Answers
-- `/code/submission_time.csv` - Answers with inference time
+#### A. STEM (Toán học & Logic)
 
-### Input Format
+* **Đặc điểm:** Yêu cầu tư duy logic, tính toán chính xác, dễ sai sót nếu chỉ dùng LLM thông thường.
+* **Chiến lược:**
+* **Chain-of-Thought (CoT):** Prompt yêu cầu giải quyết qua 4 bước: Phân tích đề -> Xác định công thức -> Tính toán -> Kiểm tra.
+* **Majority Voting (Bỏ phiếu đa số):** Sinh ra 5 câu trả lời (n=5) với `temperature=0.7`, sau đó chọn đáp án xuất hiện nhiều nhất để loại bỏ các sai số ngẫu nhiên.
+* **Self-Verification (Tự kiểm chứng):** (Tùy chọn) Mô hình tự sinh lời giải, sau đó đóng vai trò "Reviewer" để tìm lỗi sai trong chính lời giải đó.
 
-```json
-[
-  {
-    "qid": "test_0001",
-    "question": "Question text here?",
-    "choices": ["Choice A", "Choice B", "Choice C", "Choice D"]
-  }
-]
-```
 
-### Output Format
 
-**submission.csv:**
-```csv
-qid,answer
-test_0001,A
-test_0002,B
-test_0003,C
-```
+#### B. PRECISION_CRITICAL (An toàn nội dung)
 
-**submission_time.csv:**
-```csv
-qid,answer,time
-test_0001,A,1.2345
-test_0002,B,2.9087
-test_0003,C,1.0021
-```
+* **Đặc điểm:** Các câu hỏi nhạy cảm, yêu cầu hành vi vi phạm pháp luật hoặc đạo đức.
+* **Chiến lược:**
+* Sử dụng `temperature=0.1` (rất thấp) để đảm bảo tính nhất quán.
+* Prompt đặc biệt hướng dẫn mô hình **từ chối trả lời** và chọn đáp án mang tính phủ định (như "Tôi không thể trả lời...", "Không được phép...").
+* Cơ chế `ContentPolicyError` handling: Nếu API trả về lỗi policy, hệ thống tự động quét các đáp án để chọn đáp án từ chối phù hợp.
 
----
 
-## 🐳 Docker Instructions
 
-### Building the Docker Image
+#### C. COMPULSORY (Kiến thức Bắt buộc)
 
-```bash
-# Build image with tag
-sudo docker build -t vnpt-ai-submission .
+* **Đặc điểm:** Các câu hỏi về sự kiện, lịch sử, văn hóa Việt Nam.
+* **Chiến lược:**
+* Kích hoạt module RAG để truy xuất thông tin từ Vector DB.
+* Sử dụng thông tin truy xuất được làm ngữ cảnh (Context) trong Prompt.
 
-# Build takes ~15-20 minutes depending on network speed
-```
 
-### Running the Container
 
-```bash
-# Run with GPU support
-sudo docker run --gpus all \
-  -v /path/to/data/private_test.json:/code/private_test.json \
-  vnpt-ai-submission
+#### D. RAG (Đọc hiểu) & MULTIDOMAIN
 
-# Output files will be in /code/ inside container
-```
+* **RAG:** Trích xuất ngữ cảnh trực tiếp từ nội dung câu hỏi (không cần truy vấn DB ngoài).
+* **MULTIDOMAIN:** Sử dụng kiến thức tổng quát của mô hình Large/Small tùy theo cấu hình.
 
-### Testing Docker Locally
+### 3.4. Tối ưu hóa Hiệu năng (Optimization)
 
-```bash
-# 1. Prepare test data
-mkdir -p test_data
-cp data/val.json test_data/private_test.json
+Để đáp ứng giới hạn thời gian và Quota API, hệ thống áp dụng các kỹ thuật:
 
-# 2. Build image
-sudo docker build -t vnpt-ai-test .
+* **Batch Processing:**
+* Gom các câu hỏi cùng lĩnh vực (trừ STEM) vào các batch (kích thước 10).
+* Gửi 1 request duy nhất chứa 10 câu hỏi để giảm chi phí network và số lần gọi API.
+* Sử dụng định dạng đầu ra JSON để dễ dàng phân tích cú pháp (Parsing).
 
-# 3. Run container
-sudo docker run --gpus all \
-  -v $(pwd)/test_data/private_test.json:/code/private_test.json \
-  vnpt-ai-test
 
-# 4. Check outputs in container
-docker ps -a  # Get container ID
-docker cp <container_id>:/code/submission.csv ./
-docker cp <container_id>:/code/submission_time.csv ./
-```
+* **Streaming Write:**
+* Kết quả được ghi xuống ổ đĩa ngay lập tức sau khi xử lý (từng câu hoặc từng batch).
+* Hỗ trợ cơ chế **Resume**: Nếu hệ thống bị ngắt quãng, khi chạy lại sẽ tự động bỏ qua các câu hỏi đã có trong file kết quả.
 
-### Pushing to Docker Hub
 
-```bash
-# 1. Tag image
-docker tag vnpt-ai-submission <dockerhub_username>/vnpt-ai:latest
+* **Retry Mechanism:**
+* Tự động thử lại (Retry) với độ trễ tăng dần (Exponential backoff) khi gặp lỗi kết nối hoặc lỗi server 5xx.
 
-# 2. Login to Docker Hub
-docker login
 
-# 3. Push image (MUST be before 23:59 UTC+7 Dec 19, 2025)
-docker push <dockerhub_username>/vnpt-ai:latest
-```
 
-### Docker Image Specifications
+## 4. Quy trình Vận hành (Workflow)
 
-- **Base Image:** nvidia/cuda:12.2.0-devel-ubuntu20.04
-- **Python Version:** 3.8
-- **CUDA Version:** 12.2
-- **Image Size:** ~8-10GB (includes models and dependencies)
+Quy trình xử lý một tập dữ liệu đầu vào (`private_test.json`) diễn ra như sau:
 
----
+1. **Khởi tạo:**
+* Load cấu hình và API keys.
+* Kiểm tra và khởi tạo Vector Database (nếu chưa có).
+* Chuẩn bị file output CSV.
 
-## 📁 Project Structure
 
-```
-vnpt-ai/
-├── Dockerfile                    # Docker configuration
-├── inference.sh                  # Bash script for pipeline execution
-├── predict.py                    # Entry point (reads private_test.json)
-├── main.py                       # Core processing logic
-├── requirements.txt              # Python dependencies
-├── README.md                     # This file
-│
-├── config.py                     # Domain-specific configurations
-├── router_logic.py               # Question classification router
-├── rag_langchain.py              # RAG system with LangChain
-├── prompt_templates.py           # LLM prompts and templates
-├── get_response.py               # LLM API interface
-├── get_embedding.py              # Embedding API interface
-│
-├── api-keys.json                 # API keys (not in repo)
-│
-├── corpus/                       # Wikipedia corpus documents
-│   ├── 2020.txt
-│   ├── 2025.txt
-│   └── ...
-│
-├── vector_db_langchain/          # ChromaDB vector database
-│   └── (generated during setup)
-│
-└── data/                         # Test/validation datasets
-    ├── val.json
-    ├── test.json
-    └── ...
-```
+2. **Vòng lặp Xử lý (Main Loop):**
+* **Bước 1:** Đọc từng câu hỏi từ Input.
+* **Bước 2:** Kiểm tra nhanh từ khóa. Nếu là câu hỏi RAG -> Đưa vào `RAG Buffer`.
+* **Bước 3:** Nếu không phải RAG -> Đưa vào `Non-RAG Buffer`. Khi buffer đầy (10 câu) -> Gọi LLM để phân loại domain.
+* **Bước 4:** Dựa trên domain được phân loại, đưa câu hỏi vào `Domain Buffer` tương ứng.
+* **Bước 5:** Khi một `Domain Buffer` đầy (ví dụ 10 câu COMPULSORY):
+* Tạo Batch Prompt.
+* Gọi API (Batch Inference).
+* Ghi kết quả ra file `submission.csv` và `submission_time.csv`.
 
----
 
-## 🔧 Configuration
+* **Bước 6:** Đối với domain `STEM`: Xử lý đơn lẻ (hoặc batch nhỏ) với quy trình suy luận, xây dựng CoT.
 
-### Domain Settings (config.py)
 
-Each domain has customizable parameters:
+3. **Kết thúc:**
+* Xử lý toàn bộ các câu hỏi còn tồn đọng trong các Buffer.
+* Sắp xếp lại file kết quả theo `qid` để đảm bảo đúng định dạng nộp bài.
 
-```python
-DOMAIN_CONFIGS = {
-    "STEM": {
-        "use_majority_voting": True,
-        "model": "small",
-        "temperature": 0.1,
-        "num_completions": 5
-    },
-    "COMPULSORY": {
-        "use_rag": True,
-        "model": "small",
-        "temperature": 0.2,
-        "top_k_docs": 2,
-        "use_batch_processing": True
-    }
-}
-```
 
----
 
-## 📝 Notes
+## 5. Kết luận
 
-- All timestamps in UTC+7
-- Submission deadline: December 19, 2025, 23:59 (UTC+7)
-- Docker image must be pushed before deadline
-- Repository must be public and frozen after submission
-
----
-
-**Last Updated:** December 19, 2025
+Giải pháp được xây dựng với tư duy "chia để trị" (Divide and Conquer), tách bài toán lớn thành các bài toán con dựa trên đặc thù câu hỏi. Việc kết hợp RAG giúp nâng cao độ chính xác cho các câu hỏi cần kiến thức thực tế, trong khi Prompt Engineering chuyên sâu giúp giải quyết tốt các bài toán tư duy logic. Kiến trúc Batch Processing đảm bảo hệ thống vận hành hiệu quả trong giới hạn tài nguyên cho phép.
