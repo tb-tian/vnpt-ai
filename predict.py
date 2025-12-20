@@ -623,16 +623,30 @@ def predict_with_timing(test_data, output_submission, output_timing):
     print("  - Non-RAG: LLM batch classification (10 questions/call)")
     print("="*80)
     
+    # Check if output files exist to determine append or write mode
+    submission_exists = os.path.exists(output_submission)
+    timing_exists = os.path.exists(output_timing)
+    
+    submission_mode = 'a' if submission_exists else 'w'
+    timing_mode = 'a' if timing_exists else 'w'
+    
+    if submission_exists:
+        print(f"\n✓ Resuming: Appending to existing {os.path.basename(output_submission)}")
+    else:
+        print(f"\n✓ Fresh start: Creating new {os.path.basename(output_submission)}")
+    
     # Open both output files
-    submission_file = open(output_submission, 'w', newline='', encoding='utf-8')
-    timing_file = open(output_timing, 'w', newline='', encoding='utf-8')
+    submission_file = open(output_submission, submission_mode, newline='', encoding='utf-8')
+    timing_file = open(output_timing, timing_mode, newline='', encoding='utf-8')
     
     submission_writer = csv.writer(submission_file)
     timing_writer = csv.writer(timing_file)
     
-    # Write headers
-    submission_writer.writerow(['qid', 'answer'])
-    timing_writer.writerow(['qid', 'answer', 'time'])
+    # Write headers only for new files
+    if not submission_exists:
+        submission_writer.writerow(['qid', 'answer'])
+    if not timing_exists:
+        timing_writer.writerow(['qid', 'answer', 'time'])
     
     # Domain buffers for batch processing
     domain_buffers = {
@@ -741,11 +755,43 @@ def predict_with_timing(test_data, output_submission, output_timing):
                 
                 non_rag_classified += len(batch_to_classify)
                 
-                # Step 4: Add classified questions to domain buffers
+                # Step 4: Add classified questions to domain buffers OR process single immediately
                 for classified_item in batch_to_classify:
                     classified_domain = classifications.get(classified_item['qid'], 'MULTIDOMAIN')
-                    domain_buffers[classified_domain].append(classified_item)
-                    print(f"    {classified_item['qid']} → {classified_domain} buffer ({len(domain_buffers[classified_domain])} total)")
+                    
+                    # Mark as LLM classified
+                    classified_item['_llm_classified'] = True
+                    
+                    strategy = router.get_strategy_config(classified_domain)
+                    use_batch = strategy.get('use_batch_processing', True)
+                    
+                    if not use_batch:
+                        # Process single immediately
+                        print(f"    {classified_item['qid']} → {classified_domain} (LLM classify) → Processing single...", end=' ')
+                        try:
+                            start_time = time.time()
+                            answer = solve_question(classified_item)
+                            end_time = time.time()
+                            inference_time = end_time - start_time
+                            
+                            submission_writer.writerow([classified_item['qid'], answer])
+                            timing_writer.writerow([classified_item['qid'], answer, round(inference_time, 4)])
+                            submission_file.flush()
+                            timing_file.flush()
+                            processed_count += 1
+                            
+                            print(f"✓ {answer} ({inference_time:.4f}s) | Total: {processed_count}/{total_items}")
+                        except Exception as e:
+                            print(f"✗ Error: {e}")
+                            submission_writer.writerow([classified_item['qid'], 'A'])
+                            timing_writer.writerow([classified_item['qid'], 'A', 0.0])
+                            submission_file.flush()
+                            timing_file.flush()
+                            processed_count += 1
+                    else:
+                        # Add to batch buffer
+                        domain_buffers[classified_domain].append(classified_item)
+                        print(f"    {classified_item['qid']} → {classified_domain} buffer (LLM classify) ({len(domain_buffers[classified_domain])} total)")
                 
                 # Step 5: Process domain buffers that are full
                 for check_domain in domain_buffers.keys():
@@ -758,61 +804,6 @@ def predict_with_timing(test_data, output_submission, output_timing):
                         batch_to_process = domain_buffers[check_domain][:batch_size]
                         domain_buffers[check_domain] = domain_buffers[check_domain][batch_size:]
                         process_batch(check_domain, batch_to_process)
-                continue
-            
-            # Old logic for single processing (if domain doesn't use batch)
-            # This is now rare since most go through buffers
-            domain, confidence = router.classify_question(question_text, choices)
-            strategy = router.get_strategy_config(domain)
-            
-            # Check if this domain uses batch processing
-            use_batch = strategy.get('use_batch_processing', True)
-            batch_size = strategy.get('batch_size', 10)
-            
-            if not use_batch:
-                # SINGLE PROCESSING - process immediately with timing
-                if domain == "STEM":
-                    method = "verification" if strategy.get('use_self_verification') else "voting"
-                else:
-                    method = "single"
-                
-                print(f"[{idx}/{total_items}] {qid} ({domain} - {method})...", end=' ')
-                
-                start_time = time.time()
-                
-                try:
-                    answer = solve_question(item)
-                    end_time = time.time()
-                    inference_time = end_time - start_time
-                    
-                    submission_writer.writerow([qid, answer])
-                    timing_writer.writerow([qid, answer, round(inference_time, 4)])
-                    
-                    submission_file.flush()
-                    timing_file.flush()
-                    processed_count += 1
-                    
-                    print(f"✓ {answer} ({inference_time:.4f}s) | Total: {processed_count}/{total_items}")
-                    
-                except Exception as e:
-                    print(f"✗ Error: {e}")
-                    submission_writer.writerow([qid, 'A'])
-                    timing_writer.writerow([qid, 'A', 0.0])
-                    submission_file.flush()
-                    timing_file.flush()
-                    processed_count += 1
-            else:
-                # BATCH PROCESSING - add to buffer
-                domain_buffers[domain].append(item)
-                
-                # Process batch when full
-                if len(domain_buffers[domain]) >= batch_size:
-                    print(f"[{idx}/{total_items}] {qid} added to {domain} buffer (now {len(domain_buffers[domain])}/{batch_size})")
-                    batch_to_process = domain_buffers[domain][:batch_size]
-                    domain_buffers[domain] = domain_buffers[domain][batch_size:]
-                    process_batch(domain, batch_to_process)
-                else:
-                    print(f"[{idx}/{total_items}] {qid} added to {domain} buffer ({len(domain_buffers[domain])}/{batch_size})")
         
         # Classify remaining non-RAG buffer
         if non_rag_buffer:
@@ -824,8 +815,40 @@ def predict_with_timing(test_data, output_submission, output_timing):
             
             for classified_item in non_rag_buffer:
                 classified_domain = classifications.get(classified_item['qid'], 'MULTIDOMAIN')
-                domain_buffers[classified_domain].append(classified_item)
-                print(f"  {classified_item['qid']} → {classified_domain} buffer")
+                
+                # Mark as LLM classified
+                classified_item['_llm_classified'] = True
+                
+                strategy = router.get_strategy_config(classified_domain)
+                use_batch = strategy.get('use_batch_processing', True)
+                
+                if not use_batch:
+                    # Process single immediately
+                    print(f"  {classified_item['qid']} → {classified_domain} (LLM classify) → Processing single...", end=' ')
+                    try:
+                        start_time = time.time()
+                        answer = solve_question(classified_item)
+                        end_time = time.time()
+                        inference_time = end_time - start_time
+                        
+                        submission_writer.writerow([classified_item['qid'], answer])
+                        timing_writer.writerow([classified_item['qid'], answer, round(inference_time, 4)])
+                        submission_file.flush()
+                        timing_file.flush()
+                        processed_count += 1
+                        
+                        print(f"✓ {answer} ({inference_time:.4f}s) | Total: {processed_count}/{total_items}")
+                    except Exception as e:
+                        print(f"✗ Error: {e}")
+                        submission_writer.writerow([classified_item['qid'], 'A'])
+                        timing_writer.writerow([classified_item['qid'], 'A', 0.0])
+                        submission_file.flush()
+                        timing_file.flush()
+                        processed_count += 1
+                else:
+                    # Add to batch buffer
+                    domain_buffers[classified_domain].append(classified_item)
+                    print(f"  {classified_item['qid']} → {classified_domain} buffer (LLM classify)")
         
         # Process remaining buffers
         print("\n" + "="*80)
