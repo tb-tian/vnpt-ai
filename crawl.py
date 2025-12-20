@@ -347,9 +347,9 @@ if __name__ == "__main__":
 
     # crawl_from_questions('test.json')
 
-    # # Crawl from val.json
-    # print("Crawling for Validation Set...")
-    # crawl_from_questions("data/val.json")
+    # Crawl from val.json
+    print("Crawling for Validation Set...")
+    crawl_from_questions("data/val.json")
     
     # # Crawl from test.json
     # print("Crawling for Test Set...")
